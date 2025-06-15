@@ -13,3 +13,40 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+enum Role {
+  STUDENT
+  TEACHER
+}
+model User {
+  id             String    @id @default(uuid())
+  name           String
+  email          String    @unique
+  password       String
+  role           Role      @default(STUDENT)
+  listenedAudios AudioProgress[]
+  createdAt      DateTime  @default(now())
+}
+model AudioCourse {
+  id          String      @id @default(uuid())
+  title       String
+  description String?
+  audioUrl    String
+  duration    Int       // in seconds
+  createdBy   Int
+  createdAt   DateTime  @default(now())
+
+  progresses  AudioProgress[]
+}
+
+model AudioProgress {
+  id         String      @id @default(uuid())
+  userId     String
+  audioId    String
+  duration   Int      // seconds listened
+  completed  Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+
+  user       User     @relation(fields: [userId], references: [id])
+  audio      AudioCourse @relation(fields: [audioId], references: [id])
+}
+
