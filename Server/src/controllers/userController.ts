@@ -2,13 +2,16 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { prisma } from '../../prisma/client';
 import validator from 'validator';
+import redisClient from '../../utils/redisClient';
+import { sendOTP } from '../../utils/emailService';
+
 
 
 const Signup = async (req, res) => {
 
     //validating the request body
     const { name, email, password, confirmPassword } = req.body;
-    
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
     //registering user
     try {
         const existingUser = await prisma.user.findUnique({
@@ -22,17 +25,20 @@ const Signup = async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
         //creating the user
-        const user = await prisma.user.create({
-            data: {
-                name,
-                email,
-                password: hashedPassword,
-                role: 'STUDENT',
-            },
-        });
-        //generating token
-        const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
-        res.status(201).json({ status: true, message: "Account created successfully", user: { id: user.id, name: user.name, email: user.email }, token });
+        await redisClient.set(`otp:${email}`, JSON.stringify({ name, email, hashedPassword, otp }), { EX: 300 });
+        await sendOTP(email, name, otp);
+        res.status(200).json({ message: 'OTP sent to your email. Proceed to verify.' });
+        // const user = await prisma.user.create({
+        //     data: {
+        //         name,
+        //         email,
+        //         password: hashedPassword,
+        //         role: 'STUDENT',
+        //     },
+        // });
+        // //generating token
+        // const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        // res.status(201).json({ status: true, message: "Account created successfully", user: { id: user.id, name: user.name, email: user.email }, token });
     } catch (error) {
         console.error('Error creating user:', error);
         res.status(500).json({ status: false, message: 'Internal server error' });
@@ -42,9 +48,7 @@ const Signup = async (req, res) => {
 
 const Login = async (req, res) => {
     const { email, password } = req.body;
-    // if (!email || !password) {
-    //     return res.status(400).json({ status: false, message: 'Email and password are required' });
-    // }
+
     try {
         const existingUser = await prisma.user.findUnique({
             where: {
@@ -69,4 +73,32 @@ const Login = async (req, res) => {
 
 }
 
-export { Signup, Login };
+const VerifyOTP = async (req, res) => {
+    const { emailInput, otpInput } = req.body;
+    const data = await redisClient.get(`otp:${emailInput}`);
+    if (!data) return res.status(400).json({ error: 'OTP expired or not found' });
+    const str = Buffer.isBuffer(data) ? data.toString() : data;
+    const parsed = JSON.parse(str);
+    const { name, email, hashedPassword, otp } = parsed;
+    if( otpInput !== otp) {
+        return res.status(400).json({ status: false, message: 'Invalid OTP' });
+    }
+    try {
+         const user = await prisma.user.create({
+            data: {
+                name,
+                email,
+                password: hashedPassword,
+                role: 'STUDENT',
+            },
+        });
+        //generating token
+        const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        await redisClient.del(`otp:${emailInput}`);
+        res.status(201).json({ status: true, message: "Account created successfully", user: { id: user.id, name: user.name, email: user.email }, token });
+    } catch (error) {
+        console.log('Error creating user:', error);
+        res.status(500).json({ status: false, message: 'Internal server error' });
+    }
+}
+export { Signup, Login, VerifyOTP };
